@@ -224,17 +224,17 @@ let
           machine.succeed("echo -n 'secretsecret' > /tmp/secret.key")
           ${lib.optionalString (testMode == "direct") ''
             #  running direct mode
-            machine.succeed("${tsp-format}")
-            machine.succeed("${tsp-mount}")
-            machine.succeed("${tsp-mount}") # verify that the command is idempotent
-            machine.succeed("${tsp-disko}") # verify that we can destroy and recreate
+            machine.succeed("${lib.getExe tsp-format}")
+            machine.succeed("${lib.getExe tsp-mount}")
+            machine.succeed("${lib.getExe tsp-mount}") # verify that the command is idempotent
+            machine.succeed("${lib.getExe tsp-disko}") # verify that we can destroy and recreate
           ''}
           ${lib.optionalString (testMode == "module") ''
             #  running module mode
-            machine.succeed("${nodes.machine.system.build.formatScript}")
-            machine.succeed("${nodes.machine.system.build.mountScript}")
-            machine.succeed("${nodes.machine.system.build.mountScript}") # verify that the command is idempotent
-            machine.succeed("${nodes.machine.system.build.diskoScript}") # verify that we can destroy and recreate again
+            machine.succeed("${lib.getExe nodes.machine.system.build.formatScript}")
+            machine.succeed("${lib.getExe nodes.machine.system.build.mountScript}")
+            machine.succeed("${lib.getExe nodes.machine.system.build.mountScript}") # verify that the command is idempotent
+            machine.succeed("${lib.getExe nodes.machine.system.build.diskoScript}") # verify that we can destroy and recreate again
           ''}
 
           ${postDisko}
