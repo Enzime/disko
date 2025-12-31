@@ -1,0 +1,53 @@
+name: update-flake-lock
+on:
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    - cron: '0 0 * * 1,4' # Run twice a week
+permissions:
+  pull-requests: write
+  contents: write
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check branch ownership
+        id: check-branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: update_flake_lock_action
+        run: |
+          # Check if the branch exists and who owns it
+          BRANCH_INFO=$(gh api repos/${{ github.repository }}/branches/$BRANCH 2>/dev/null || echo "not_found")
+
+          if [ "$BRANCH_INFO" = "not_found" ]; then
+            echo "Branch does not exist, safe to proceed"
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Get the author of the latest commit on the branch
+          AUTHOR=$(echo "$BRANCH_INFO" | jq -r '.commit.author.login // empty')
+          COMMITTER=$(echo "$BRANCH_INFO" | jq -r '.commit.committer.login // empty')
+
+          echo "Branch exists with author: $AUTHOR, committer: $COMMITTER"
+
+          # Only proceed if the branch was created by the bot
+          if [ "$AUTHOR" = "github-actions[bot]" ] || [ "$COMMITTER" = "github-actions[bot]" ]; then
+            echo "Branch owned by github-actions[bot], safe to proceed"
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Branch '$BRANCH' exists and is owned by '$AUTHOR', not github-actions[bot]. Refusing to overwrite."
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: Install Nix
+        if: steps.check-branch.outputs.safe == 'true'
+        uses: cachix/install-nix-action@v31
+      - name: Update flake.lock
+        if: steps.check-branch.outputs.safe == 'true'
+        uses: DeterminateSystems/update-flake-lock@v24
+        with:
+          pr-labels: |
+            merge-queue
