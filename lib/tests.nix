@@ -107,10 +107,45 @@ let
             importedDiskoConfig { inherit lib; }
           else
             importedDiskoConfig;
-        testConfigInstall = testLib.prepareDiskoConfig diskoConfigWithArgs (lib.tail testLib.devices);
+
+        # When extendModules is provided (from module.nix), we use it to merge
+        # extraSystemConfig (which includes disko.tests.extraConfig from the NixOS config).
+        #
+        # For standalone tests, we extract disko.tests.extraConfig directly from the
+        # disko-config file itself, allowing test files to embed their test-specific
+        # NixOS configuration. This unifies the two code paths.
+        #
+        # The merged config is then passed to prepareDiskoConfig, so test-specific
+        # disko overrides (like partition sizes, LUKS keys) are applied before
+        # device path transformation.
+        embeddedTestConfig = diskoConfigWithArgs.disko.tests.extraConfig or { };
+
+        mergedDiskoConfig =
+          if extendModules != null then
+            # Module mode: use extendModules for proper NixOS module merging
+            let
+              mergedEval = extendModules { modules = [ extraSystemConfig ]; };
+            in
+            builtins.removeAttrs mergedEval.config [ "_module" ]
+          else
+            # Standalone mode: use eval-config to properly merge configs as modules
+            let
+              mergedEval = eval-config {
+                modules = [
+                  ../module.nix
+                  diskoConfigWithArgs
+                  embeddedTestConfig
+                  extraSystemConfig
+                ];
+                system = pkgs.stdenv.hostPlatform.system;
+              };
+            in
+            builtins.removeAttrs mergedEval.config [ "_module" ];
+
+        testConfigInstall = testLib.prepareDiskoConfig mergedDiskoConfig (lib.tail testLib.devices);
         # we need to shift the disks by one because the first disk is the /dev/vda of the test runner
         # so /dev/vdb becomes /dev/vda etc.
-        testConfigBooted = testLib.prepareDiskoConfig diskoConfigWithArgs testLib.devices;
+        testConfigBooted = testLib.prepareDiskoConfig mergedDiskoConfig testLib.devices;
 
         tsp-generator = pkgs.callPackage ../. { checked = true; };
         tsp-format = (tsp-generator._cliFormat testConfigInstall) pkgs;
@@ -121,6 +156,7 @@ let
         num-disks = builtins.length (lib.attrNames testConfigBooted.disko.devices.disk);
 
         # Module containing the base disko configuration for the installed system
+        # Only used when extendModules is NOT provided (standalone test mode)
         diskoModule =
           { config, ... }:
           {
@@ -147,6 +183,7 @@ let
           };
 
         # Module containing test-specific configuration for the VM environment
+        # This applies the QEMU device paths from prepareDiskoConfig
         testInstrumentationModule =
           { config, modulesPath, ... }:
           {
@@ -155,6 +192,10 @@ let
               (modulesPath + "/profiles/qemu-guest.nix")
             ];
 
+            # Apply the prepared disko config with QEMU device paths.
+            # We use mkForce because the device paths MUST be the QEMU virtio devices,
+            # but other disko settings (partition sizes, LUKS config, etc.) have already
+            # been merged via extraSystemConfig before prepareDiskoConfig was called.
             disko.devices = lib.mkForce testConfigBooted.disko.devices;
 
             # since we boot on a different machine, the efi payload needs to be portable
@@ -207,11 +248,13 @@ let
               system = pkgs.stdenv.hostPlatform.system;
             }).extendModules;
 
+        # When extendModules is provided, extraSystemConfig has already been merged
+        # into mergedDiskoConfig above, so we only add testInstrumentationModule here.
+        # When extendModules is NOT provided, we add both.
         installed-system-eval = baseExtendModules {
-          modules = [
-            testInstrumentationModule
-            extraSystemConfig
-          ];
+          modules =
+            [ testInstrumentationModule ]
+            ++ lib.optional (extendModules == null) extraSystemConfig;
         };
 
         installedTopLevel = installed-system-eval.config.system.build.toplevel;
