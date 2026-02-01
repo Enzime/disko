@@ -5,9 +5,10 @@
   # but garnix currently does not allow this.
   #inputs.nixpkgs.url = "nixpkgs";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-24.11";
 
   outputs =
-    { self, nixpkgs, ... }:
+    { self, nixpkgs, nixpkgs-stable, ... }:
     let
       lib = nixpkgs.lib;
       supportedSystems = [
@@ -61,6 +62,8 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          pkgsStable = nixpkgs-stable.legacyPackages.${system};
+
           # FIXME: aarch64-linux seems to hang on boot
           nixosTests = lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 (
             import ./tests {
@@ -71,7 +74,24 @@
             }
           );
 
+          # NixOS stable tests
+          nixosTestsStable = lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 (
+            lib.mapAttrs' (name: value: lib.nameValuePair "stable-${name}" value) (
+              import ./tests {
+                pkgs = pkgsStable;
+                makeTest = import (nixpkgs-stable + "/nixos/tests/make-test-python.nix");
+                eval-config = import (nixpkgs-stable + "/nixos/lib/eval-config.nix");
+                qemu-common = import (nixpkgs-stable + "/nixos/lib/qemu-common.nix");
+              }
+            )
+          );
+
           disko-install = pkgs.callPackage ./tests/disko-install {
+            inherit self;
+            diskoVersion = version;
+          };
+
+          disko-install-stable = pkgsStable.callPackage ./tests/disko-install {
             inherit self;
             diskoVersion = version;
           };
@@ -93,7 +113,14 @@
           '';
         in
         # FIXME: aarch64-linux seems to hang on boot
-        lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 (nixosTests // { inherit disko-install; })
+        lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 (
+          nixosTests
+          // nixosTestsStable
+          // {
+            inherit disko-install;
+            stable-disko-install = disko-install-stable;
+          }
+        )
         //
           pkgs.lib.optionalAttrs (!pkgs.stdenv.buildPlatform.isRiscV64 && !pkgs.stdenv.hostPlatform.isx86_32)
             {
